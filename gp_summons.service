@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram Bot - GP Summons Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/gp_summons_bot
+ExecStart=/opt/gp_summons_bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/gp_summons_bot/.env
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+services:
+  summons-bot:
+    build: .
+    container_name: gp_summons_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Зберігаємо базу даних на хості, щоб дані не втрачалися при перезапуску
+      - ./data:/app/data
