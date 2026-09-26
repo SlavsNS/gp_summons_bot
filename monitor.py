@@ -8,6 +8,7 @@ from aiogram.enums import ParseMode
 from config import CHECK_INTERVAL_MINUTES
 from database import db
 from scraper import scraper
+from mvs_client import mvs_client
 from matcher import extract_name_components, match_summons_title
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,48 @@ async def send_summons_alert(bot: Bot, user_id: int, person: dict, post: dict):
 
     except Exception as e:
         logger.error(f"Failed to send alert to user {user_id}: {e}")
+
+async def send_mvs_alert(bot: Bot, user_id: int, person: dict, mvs_item: dict):
+    """
+    Sends an alert with full dossier and photo when a tracked person is found in MVS wanted database.
+    """
+    import html, base64
+    from aiogram.types import BufferedInputFile
+
+    try:
+        f_name = mvs_item.get("first_name", "")
+        m_name = mvs_item.get("middle_name", "")
+        l_name = mvs_item.get("last_name", "")
+        full_pib = f"{l_name} {f_name} {m_name}".strip()
+
+        caption = (
+            f"🚨 <b>УВАГА! ВІДСТЕЖУВАНУ ОСОБУ ВИЯВЛЕНО В РОЗШУКУ МВС!</b>\n\n"
+            f"👤 <b>ПІБ:</b> <b>{html.escape(full_pib)}</b>\n"
+            f"📅 <b>Дата народження:</b> {html.escape(mvs_item.get('birthday') or 'Не вказано')}\n"
+            f"⚖️ <b>Стаття ККУ:</b> <code>{html.escape(mvs_item.get('accusatory_item') or 'Не вказано')}</code>\n"
+            f"🔒 <b>Запобіжний захід:</b> {html.escape(mvs_item.get('precaution') or 'Не вказано')}\n"
+            f"🚔 <b>Орган розшуку:</b> {html.escape(mvs_item.get('authority') or 'Не вказано')}\n"
+            f"📆 <b>Дата зникнення:</b> {html.escape(mvs_item.get('disappear_day') or 'Не вказано')}\n"
+            f"📍 <b>Місце зникнення:</b> {html.escape(mvs_item.get('disappear_place') or 'Не вказано')}\n"
+            f"🏷 <b>Категорія:</b> {html.escape(mvs_item.get('category') or 'Особа, що переховується')}\n"
+        )
+        if mvs_item.get("contacts"):
+            caption += f"📞 <b>Контакти:</b> {html.escape(mvs_item['contacts'])}\n"
+
+        photo_b64 = mvs_item.get("photo")
+        if photo_b64:
+            try:
+                photo_bytes = base64.b64decode(photo_b64)
+                photo_file = BufferedInputFile(photo_bytes, filename=f"mvs_{person['id']}.jpg")
+                await bot.send_photo(chat_id=user_id, photo=photo_file, caption=caption, parse_mode=ParseMode.HTML)
+                return
+            except Exception as p_err:
+                logger.warning(f"Failed to send alert photo: {p_err}")
+
+        await bot.send_message(chat_id=user_id, text=caption, parse_mode=ParseMode.HTML)
+        logger.info(f"Successfully alerted user {user_id} regarding MVS wanted for {full_pib}")
+    except Exception as e:
+        logger.error(f"Failed to send MVS alert to user {user_id}: {e}")
 
 async def check_summons_for_all(bot: Bot):
     """
@@ -140,6 +183,28 @@ async def check_summons_for_all(bot: Bot):
             await asyncio.sleep(1.0)
         except Exception as e:
             logger.error(f"Error in targeted search for stem '{stem}': {e}")
+
+    # Strategy C: Check MVS Wanted database for tracked persons with first_name
+    for item in parsed_persons:
+        p = item["db_person"]
+        comp = item["components"]
+        if comp.get("first_name") and comp.get("surname"):
+            try:
+                mvs_results = await mvs_client.search_wanted(
+                    last_name=comp["surname"],
+                    first_name=comp["first_name"],
+                    middle_name=comp.get("patronymic")
+                )
+                for mvs_item in mvs_results:
+                    mvs_key = f"mvs://wanted/{mvs_item.get('last_name')}_{mvs_item.get('first_name')}_{mvs_item.get('birthday')}"
+                    already_sent = await db.has_notification_been_sent(p["user_id"], p["id"], mvs_key)
+                    if not already_sent:
+                        found_in_this_cycle += 1
+                        await send_mvs_alert(bot, p["user_id"], p, mvs_item)
+                        await db.record_notification_sent(p["user_id"], p["id"], mvs_key)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Error checking MVS for {p['full_name']}: {e}")
 
     LAST_CHECK_INFO["last_found_count"] = found_in_this_cycle
     LAST_CHECK_INFO["status"] = f"Працює нормально (останній раз перевірено о {now_str})"

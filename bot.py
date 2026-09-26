@@ -18,6 +18,7 @@ from handlers import main_router
 from monitor import run_monitoring_worker
 from database import db
 from scraper import scraper
+from mvs_client import mvs_client
 
 
 # Configure logging
@@ -41,17 +42,28 @@ async def start_health_server():
 
     async def handle_diag(request):
         q = request.query.get("q", "Гавриленк")
+        mvs_q = request.query.get("mvs", "Петренко Петро")
         diag_info = []
         try:
             latest = await scraper.get_latest_summons(page=1)
-            diag_info.append(f"Latest items parsed: {len(latest)}")
+            diag_info.append(f"Latest OGP items parsed: {len(latest)}")
             if latest:
-                diag_info.append(f"First item: {latest[0]['date']} - {latest[0]['title']}")
+                diag_info.append(f"First OGP item: {latest[0]['date']} - {latest[0]['title']}")
             
             res = await scraper.search_summons(q, page=1)
-            diag_info.append(f"\nSearch for '{q}': found {len(res)} items")
+            diag_info.append(f"\nOGP Search for '{q}': found {len(res)} items")
             for r in res[:3]:
                 diag_info.append(f" - {r['date']}: {r['title']}")
+
+            # Test MVS search
+            mvs_parts = mvs_q.strip().split()
+            mvs_ln = mvs_parts[0] if mvs_parts else "Петренко"
+            mvs_fn = mvs_parts[1] if len(mvs_parts) > 1 else "Петро"
+            mvs_res = await mvs_client.search_wanted(mvs_ln, mvs_fn)
+            diag_info.append(f"\nMVS Wanted Search for '{mvs_ln} {mvs_fn}': found {len(mvs_res)} items")
+            for m in mvs_res[:3]:
+                has_photo = "yes" if m.get("photo") else "no"
+                diag_info.append(f" - {m.get('last_name')} {m.get('first_name')} ({m.get('birthday')}): article '{m.get('accusatory_item')}', photo: {has_photo}")
                 
             return web.Response(text="\n".join(diag_info))
         except Exception as e:

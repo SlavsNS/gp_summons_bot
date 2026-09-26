@@ -9,6 +9,7 @@ from aiogram.enums import ParseMode
 from database import db
 from matcher import extract_name_components, match_summons_title
 from scraper import scraper
+from mvs_client import mvs_client
 from handlers.common import get_main_keyboard
 
 logger = logging.getLogger(__name__)
@@ -128,10 +129,27 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
             await message.answer(response_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         else:
             await message.answer(
-                "🟢 <b>Поточних повісток на сайті не виявлено.</b>\n"
+                "🟢 <b>Поточних повісток на сайті ОГП не виявлено.</b>\n"
                 "Система відстежуватиме сайт цілодобово і надішле сповіщення, щойно з'явиться будь-яка повістка.",
                 parse_mode=ParseMode.HTML
             )
+
+        # Immediate check in MVS database if first name is available
+        if comp.get("first_name"):
+            try:
+                mvs_res = await mvs_client.search_wanted(
+                    last_name=surname,
+                    first_name=comp["first_name"],
+                    middle_name=comp.get("patronymic")
+                )
+                if mvs_res:
+                    await message.answer(
+                        f"🚨 <b>УВАГА! Ця особа знайдена в базі розшуку МВС України ({len(mvs_res)} запис(ів))!</b>\n\n"
+                        f"Скористайтеся <code>/mvs {html.escape(comp['raw'])}</code> або кнопкою <b>«🚨 Розшук МВС»</b>, щоб переглянути фото, статтю ККУ та орган розшуку.",
+                        parse_mode=ParseMode.HTML
+                    )
+            except Exception as mvs_e:
+                logger.warning(f"Error checking MVS on add: {mvs_e}")
 
     except Exception as e:
         logger.error(f"Error during initial check: {e}")
