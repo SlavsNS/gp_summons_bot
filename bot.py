@@ -13,6 +13,8 @@ from config import BOT_TOKEN, LOG_LEVEL, CHECK_INTERVAL_MINUTES
 from handlers import main_router
 from monitor import run_monitoring_worker
 from database import db
+from scraper import scraper
+
 
 # Configure logging
 logging.basicConfig(
