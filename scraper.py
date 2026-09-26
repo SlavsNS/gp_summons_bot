@@ -3,46 +3,30 @@ import logging
 from html import unescape
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote, urljoin
-import aiohttp
+from curl_cffi.requests import AsyncSession
 
 from config import GP_BASE_URL, SUMMONS_FULL_URL
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.gp.gov.ua/",
-    "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1"
-}
-
 
 class GPScraper:
     def __init__(self):
-        self.headers = DEFAULT_HEADERS
+        self.impersonate = "chrome124"
 
     async def _fetch_html(self, url: str) -> Optional[str]:
         try:
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(headers=self.headers, timeout=timeout) as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        return await response.text(encoding="utf-8", errors="ignore")
-                    else:
-                        logger.warning(f"Failed to fetch {url}: HTTP {response.status}")
-                        return None
+            async with AsyncSession(impersonate=self.impersonate, timeout=20) as session:
+                response = await session.get(url)
+                if response.status_code == 200:
+                    return response.text
+                else:
+                    logger.warning(f"Failed to fetch {url}: HTTP {response.status_code}")
+                    return None
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")
             return None
+
 
     def _parse_summons_list(self, html: str) -> List[Dict[str, Any]]:
         """Parses summons items from category or search HTML page."""

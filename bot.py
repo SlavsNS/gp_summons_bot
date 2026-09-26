@@ -42,21 +42,29 @@ async def start_health_server():
         diag_info = []
         try:
             url = "https://www.gp.gov.ua/ua/categories/povistki-pro-viklik-ta-vidomosti-pro-zdijsnennya-specialnogo-dosudovogo-rozsliduvannya"
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(headers=scraper.headers, timeout=timeout) as session:
-                async with session.get(url) as resp:
-                    raw_html = await resp.text(encoding="utf-8", errors="ignore")
-                    diag_info.append(f"HTTP Status: {resp.status}")
-                    diag_info.append(f"HTML Length: {len(raw_html)} bytes")
-                    diag_info.append(f"HTML Snippet:\n{raw_html[:400]}")
+            raw_html = await scraper._fetch_html(url)
+            if raw_html:
+                diag_info.append(f"HTML Length: {len(raw_html)} bytes")
+                diag_info.append(f"Snippet: {raw_html[:150]}")
+            else:
+                diag_info.append("HTML returned None!")
             
             # Test 1: Fetch latest
             latest = await scraper.get_latest_summons(page=1)
             diag_info.append(f"\nLatest items parsed: {len(latest)}")
+            if latest:
+                diag_info.append(f"First item: {latest[0]['date']} - {latest[0]['title']}")
             
+            # Test 2: Search
+            res = await scraper.search_summons(q, page=1)
+            diag_info.append(f"\nSearch for '{q}': found {len(res)} items")
+            for r in res[:3]:
+                diag_info.append(f" - {r['date']}: {r['title']}")
+                
             return web.Response(text="\n".join(diag_info))
         except Exception as e:
             return web.Response(text=f"Diagnostic error: {type(e).__name__}: {str(e)}", status=500)
+
 
         
     app.router.add_get("/", handle_ping)
