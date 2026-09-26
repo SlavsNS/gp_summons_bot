@@ -1,13 +1,15 @@
 import asyncio
 import logging
 import sys
+import aiohttp
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from aiohttp import web
+
 
 from config import BOT_TOKEN, LOG_LEVEL, CHECK_INTERVAL_MINUTES
 from handlers import main_router
