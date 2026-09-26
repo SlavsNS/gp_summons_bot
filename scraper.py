@@ -12,20 +12,25 @@ logger = logging.getLogger(__name__)
 
 class GPScraper:
     def __init__(self):
-        self.impersonate = "chrome124"
+        self.impersonate = "chrome110"
+        self.headers = {
+            "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.google.com/"
+        }
 
     async def _fetch_html(self, url: str) -> Optional[str]:
         try:
             async with AsyncSession(impersonate=self.impersonate, timeout=20) as session:
-                response = await session.get(url)
+                response = await session.get(url, headers=self.headers)
                 if response.status_code == 200:
                     return response.text
                 else:
                     logger.warning(f"Failed to fetch {url}: HTTP {response.status_code}")
-                    return f"HTTP_ERROR_{response.status_code}: {response.text[:200]}"
+                    return None
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")
-            return f"EXCEPTION_{type(e).__name__}: {str(e)}"
+            return None
+
 
 
 

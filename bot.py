@@ -40,34 +40,23 @@ async def start_health_server():
         return web.Response(text="🟢 GP Summons Bot is alive and running!")
 
     async def handle_diag(request):
-        target_impersonate = request.query.get("imp", "chrome124")
+        q = request.query.get("q", "Гавриленк")
         diag_info = []
-        url = "https://www.gp.gov.ua/ua/categories/povistki-pro-viklik-ta-vidomosti-pro-zdijsnennya-specialnogo-dosudovogo-rozsliduvannya"
-        
-        test_targets = [
-            ("chrome124", "https://www.gp.gov.ua/ua/categories/povistki-pro-viklik-ta-vidomosti-pro-zdijsnennya-specialnogo-dosudovogo-rozsliduvannya"),
-            ("safari17_0", "https://www.gp.gov.ua/ua/categories/povistki-pro-viklik-ta-vidomosti-pro-zdijsnennya-specialnogo-dosudovogo-rozsliduvannya"),
-            ("chrome99_android", "https://www.gp.gov.ua/ua/categories/povistki-pro-viklik-ta-vidomosti-pro-zdijsnennya-specialnogo-dosudovogo-rozsliduvannya"),
-            ("chrome110", "https://gp.gov.ua/ua/categories/povistki-pro-viklik-ta-vidomosti-pro-zdijsnennya-specialnogo-dosudovogo-rozsliduvannya"),
-        ]
-        
-        for imp, test_url in test_targets:
-            try:
-                async with AsyncSession(impersonate=imp, timeout=10) as s:
-                    headers = {
-                        "Accept-Language": "uk-UA,uk;q=0.9",
-                        "Referer": "https://www.google.com/"
-                    }
-                    r = await s.get(test_url, headers=headers)
-                    diag_info.append(f"[{imp}] URL: {test_url} -> Status: {r.status_code}, Len: {len(r.text)}")
-                    if r.status_code == 200:
-                        diag_info.append(f"   SUCCESS! Snippet: {r.text[:100]}")
-                    else:
-                        diag_info.append(f"   Blocked: {r.text[:100]}")
-            except Exception as e:
-                diag_info.append(f"[{imp}] Exception: {type(e).__name__}: {str(e)}")
+        try:
+            latest = await scraper.get_latest_summons(page=1)
+            diag_info.append(f"Latest items parsed: {len(latest)}")
+            if latest:
+                diag_info.append(f"First item: {latest[0]['date']} - {latest[0]['title']}")
+            
+            res = await scraper.search_summons(q, page=1)
+            diag_info.append(f"\nSearch for '{q}': found {len(res)} items")
+            for r in res[:3]:
+                diag_info.append(f" - {r['date']}: {r['title']}")
                 
-        return web.Response(text="\n".join(diag_info))
+            return web.Response(text="\n".join(diag_info))
+        except Exception as e:
+            return web.Response(text=f"Diagnostic error: {type(e).__name__}: {str(e)}", status=500)
+
 
 
 
