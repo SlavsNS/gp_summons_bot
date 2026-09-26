@@ -3,8 +3,10 @@ import logging
 import sys
 import aiohttp
 from aiohttp import web
+from curl_cffi.requests import AsyncSession
 
 from aiogram import Bot, Dispatcher
+
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
