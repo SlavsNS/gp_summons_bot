@@ -25,22 +25,44 @@ logging.basicConfig(
 logger = logging.getLogger("summons_bot")
 
 async def start_health_server():
-    """Runs a lightweight HTTP server on $PORT for Render health checks."""
+    """Runs a lightweight HTTP server on $PORT for Render health checks and diagnostics."""
     import os
     port = int(os.getenv("PORT", "10000"))
     app = web.Application()
     
     async def handle_ping(request):
         return web.Response(text="🟢 GP Summons Bot is alive and running!")
+
+    async def handle_diag(request):
+        q = request.query.get("q", "Гавриленк")
+        diag_info = []
+        try:
+            # Test 1: Fetch latest
+            latest = await scraper.get_latest_summons(page=1)
+            diag_info.append(f"Latest items fetched: {len(latest)}")
+            if latest:
+                diag_info.append(f"First item: {latest[0]['date']} - {latest[0]['title']}")
+            
+            # Test 2: Search
+            res = await scraper.search_summons(q, page=1)
+            diag_info.append(f"Search for '{q}': found {len(res)} items")
+            for r in res[:3]:
+                diag_info.append(f" - {r['date']}: {r['title']}")
+                
+            return web.Response(text="\n".join(diag_info))
+        except Exception as e:
+            return web.Response(text=f"Diagnostic error: {type(e).__name__}: {str(e)}", status=500)
         
     app.router.add_get("/", handle_ping)
     app.router.add_get("/health", handle_ping)
+    app.router.add_get("/diag", handle_diag)
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Health check web server started on 0.0.0.0:{port}")
+    logger.info(f"Health check & diag web server started on 0.0.0.0:{port}")
+
 
 async def on_startup(bot: Bot):
     bot_info = await bot.get_me()
