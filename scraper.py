@@ -22,17 +22,19 @@ class GPScraper:
                     return response.text
                 else:
                     logger.warning(f"Failed to fetch {url}: HTTP {response.status_code}")
-                    return None
+                    return f"HTTP_ERROR_{response.status_code}: {response.text[:200]}"
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")
-            return None
+            return f"EXCEPTION_{type(e).__name__}: {str(e)}"
+
 
 
     def _parse_summons_list(self, html: str) -> List[Dict[str, Any]]:
         """Parses summons items from category or search HTML page."""
         items = []
-        if not html:
+        if not html or html.startswith("HTTP_ERROR_") or html.startswith("EXCEPTION_"):
             return items
+
 
         # News item pattern
         item_pattern = r'<div class="news-item">.*?<div class="news_title">\s*<a href="([^"]+)">(.*?)</a>.*?<a[^>]*class="news_date">(.*?)</a>'
