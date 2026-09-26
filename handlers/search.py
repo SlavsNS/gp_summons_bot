@@ -85,14 +85,16 @@ async def perform_quick_search(message: Message, raw_query: str, state: FSMConte
             return
 
         # Results found!
+        import html
         text = (
             f"⚠️ <b>Знайдено публікації ({len(matched_posts)}):</b>\n"
-            f"👤 Запит: <code>{comp['raw']}</code>\n\n"
+            f"👤 Запит: <code>{html.escape(comp['raw'])}</code>\n\n"
         )
 
         buttons = []
         for i, (post, conf, reason) in enumerate(matched_posts[:5], 1):
-            text += f"<b>{i}. {post['title']}</b>\n"
+            clean_title = html.escape(post['title'])
+            text += f"<b>{i}. {clean_title}</b>\n"
             text += f"📅 Дата: {post['date']}\n"
             text += f"🔗 <a href='{post['url']}'>Переглянути публікацію</a>\n\n"
             if i <= 3:
@@ -104,8 +106,16 @@ async def perform_quick_search(message: Message, raw_query: str, state: FSMConte
         text += "ℹ️ <i>Щоб отримувати автоматичні сповіщення при появі нових повісток, додайте особу через «➕ Додати особу».</i>"
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-        await status_msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
+        try:
+            await status_msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
+        except Exception as edit_err:
+            logger.error(f"Failed to edit status message: {edit_err}")
+            await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
 
     except Exception as e:
-        logger.error(f"Error during quick search: {e}")
-        await status_msg.edit_text("❌ Сталася помилка під час звернення до сайту ОГП. Спробуйте пізніше.")
+        logger.exception(f"Error during quick search: {e}")
+        try:
+            await status_msg.edit_text(f"❌ Сталася помилка під час звернення до сайту ОГП: {str(e)[:100]}")
+        except Exception:
+            await message.answer("❌ Сталася помилка під час звернення до сайту ОГП. Спробуйте пізніше.")
+
