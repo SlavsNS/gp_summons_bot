@@ -77,6 +77,7 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
         )
         return
 
+    import html
     # Register in DB
     person_id = await db.add_tracked_person(
         user_id=user_id,
@@ -87,7 +88,7 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
 
     if not person_id:
         await message.answer(
-            f"ℹ️ Особа <b>{comp['raw']}</b> вже є у вашому списку моніторингу!",
+            f"ℹ️ Особа <b>{html.escape(comp['raw'])}</b> вже є у вашому списку моніторингу!",
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_keyboard()
         )
@@ -96,8 +97,8 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
     # Initial response
     status_msg = await message.answer(
         f"✅ <b>Особу успішно додано!</b>\n\n"
-        f"👤 <b>ПІБ:</b> <code>{comp['raw']}</code>\n"
-        f"🔍 <b>Пошукова основа:</b> <code>{stem}</code>\n\n"
+        f"👤 <b>ПІБ:</b> <code>{html.escape(comp['raw'])}</code>\n"
+        f"🔍 <b>Пошукова основа:</b> <code>{html.escape(stem)}</code>\n\n"
         f"⏳ <i>Здійснюю початкову перевірку на сайті ОГП...</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard()
@@ -117,7 +118,8 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
                 f"⚠️ <b>Увага! На сайті ОГП вже є публікації щодо цієї особи ({len(matches)}):</b>\n\n"
             )
             for m in matches[:5]:
-                response_text += f"📅 <i>{m['date']}</i>\n<a href='{m['url']}'>{m['title']}</a>\n\n"
+                clean_t = html.escape(m['title'])
+                response_text += f"📅 <i>{m['date']}</i>\n<a href='{m['url']}'>{clean_t}</a>\n\n"
 
             if len(matches) > 5:
                 response_text += f"<i>...та ще {len(matches) - 5} публікацій.</i>\n\n"
@@ -130,6 +132,7 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
                 "Система відстежуватиме сайт цілодобово і надішле сповіщення, щойно з'явиться будь-яка повістка.",
                 parse_mode=ParseMode.HTML
             )
+
     except Exception as e:
         logger.error(f"Error during initial check: {e}")
         await message.answer("⚠️ Не вдалося виконати початкову перевірку сайту, але моніторинг активний.")
