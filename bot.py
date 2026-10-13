@@ -38,7 +38,7 @@ async def start_health_server():
     app = web.Application()
     
     async def handle_ping(request):
-        return web.Response(text="🟢 GP Summons Bot is alive and running!")
+        return web.Response(text="OK", content_type="text/plain")
 
     async def handle_diag(request):
         q = request.query.get("q", "Гавриленк")
@@ -74,7 +74,9 @@ async def start_health_server():
 
         
     app.router.add_get("/", handle_ping)
+    app.router.add_head("/", handle_ping)
     app.router.add_get("/health", handle_ping)
+    app.router.add_head("/health", handle_ping)
     app.router.add_get("/diag", handle_diag)
     
     runner = web.AppRunner(app)
