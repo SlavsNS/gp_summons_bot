@@ -64,6 +64,12 @@ class Database:
                     UNIQUE (user_id, person_id, post_url)
                 )
             """)
+            # Try migrating tracked_persons to add is_mvs_wanted column if missing
+            try:
+                cursor.execute("ALTER TABLE tracked_persons ADD COLUMN is_mvs_wanted INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
 
     # --- Async methods ---
@@ -83,20 +89,32 @@ class Database:
                 conn.commit()
         await asyncio.to_thread(_sync)
 
-    async def add_tracked_person(self, user_id: int, full_name: str, surname: str, stem: str) -> Optional[int]:
+    async def add_tracked_person(self, user_id: int, full_name: str, surname: str, stem: str, is_mvs_wanted: int = 0) -> Optional[int]:
         def _sync():
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute("""
-                        INSERT INTO tracked_persons (user_id, full_name, surname, stem)
-                        VALUES (?, ?, ?, ?)
-                    """, (user_id, full_name.strip(), surname.strip(), stem.strip()))
+                        INSERT INTO tracked_persons (user_id, full_name, surname, stem, is_mvs_wanted)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (user_id, full_name.strip(), surname.strip(), stem.strip(), is_mvs_wanted))
                     conn.commit()
                     return cursor.lastrowid
                 except sqlite3.IntegrityError:
                     return None
         return await asyncio.to_thread(_sync)
+
+    async def update_mvs_wanted_status(self, person_id: int, is_wanted: int):
+        def _sync():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE tracked_persons
+                    SET is_mvs_wanted = ?
+                    WHERE id = ?
+                """, (is_wanted, person_id))
+                conn.commit()
+        await asyncio.to_thread(_sync)
 
     async def remove_tracked_person(self, user_id: int, person_id: int) -> bool:
         def _sync():
@@ -115,7 +133,7 @@ class Database:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, user_id, full_name, surname, stem, created_at
+                    SELECT id, user_id, full_name, surname, stem, is_mvs_wanted, created_at
                     FROM tracked_persons
                     WHERE user_id = ?
                     ORDER BY id ASC
@@ -129,7 +147,7 @@ class Database:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT tp.id, tp.user_id, tp.full_name, tp.surname, tp.stem, u.first_name, u.username
+                    SELECT tp.id, tp.user_id, tp.full_name, tp.surname, tp.stem, tp.is_mvs_wanted, u.first_name, u.username
                     FROM tracked_persons tp
                     JOIN users u ON tp.user_id = u.user_id
                     WHERE u.is_active = 1

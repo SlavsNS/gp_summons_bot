@@ -123,6 +123,12 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
                 first_name=comp["first_name"],
                 middle_name=comp.get("patronymic")
             )
+            # Update DB with current wanted status so we don't alert unless status changes
+            is_wanted_initial = 1 if len(mvs_matches) > 0 else 0
+            await db.update_mvs_wanted_status(person_id, is_wanted_initial)
+            if is_wanted_initial:
+                mvs_key = f"mvs://wanted/{mvs_matches[0].get('last_name')}_{mvs_matches[0].get('first_name')}_{mvs_matches[0].get('birthday')}"
+                await db.record_notification_sent(user_id, person_id, mvs_key)
         except Exception as mvs_e:
             logger.error(f"Error checking MVS on add: {mvs_e}")
 
@@ -273,3 +279,110 @@ async def handle_callback_main_menu(callback: CallbackQuery, state: FSMContext):
         "Головне меню 👇",
         reply_markup=get_main_keyboard()
     )
+
+@router.message(Command("check_all"))
+@router.message(F.text == "⚡ Перевірити всіх зараз")
+async def handle_check_all(message: Message):
+    user_id = message.from_user.id
+    persons = await db.get_user_tracked_persons(user_id)
+
+    if not persons:
+        await message.answer(
+            "📋 <b>Ваш список спостереження порожній.</b>\n\n"
+            "Щоб додати особу для моніторингу, натисніть <b>«➕ Додати особу»</b>.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    import html
+    from datetime import datetime
+    status_msg = await message.answer(
+        f"⏳ <i>Здійснюю моментальну перевірку {len(persons)} осіб за базами ОГП та МВС...</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_keyboard()
+    )
+
+    now_time = datetime.now().strftime("%H:%M:%S")
+    results_text = (
+        f"⚡ <b>МОМЕНТАЛЬНИЙ СТАТУС УСІХ ОСІБ ({len(persons)}):</b>\n"
+        f"🕒 <i>Станом на {now_time}</i>\n\n"
+    )
+
+    for i, p in enumerate(persons, 1):
+        full_name = p["full_name"]
+        comp = extract_name_components(full_name)
+        stem = comp["stem"]
+        surname = comp["surname"]
+
+        # 1. Check OGP
+        ogp_status = "🟢 Повісток не виявлено"
+        try:
+            ogp_res = await scraper.search_summons(stem, page=1)
+            matches = []
+            for post in ogp_res:
+                is_match, conf, _ = match_summons_title(post["title"], comp)
+                if is_match and conf >= 0.7:
+                    matches.append(post)
+            if matches:
+                latest_date = matches[0].get("date", "")
+                ogp_status = f"⚠️ <b>Є повістка</b> (остання {latest_date})"
+        except Exception:
+            ogp_status = "⚠️ Помилка зв'язку"
+
+        # 2. Check MVS
+        mvs_status = "🟢 В розшуку відсутній"
+        if comp.get("first_name"):
+            try:
+                mvs_res = await mvs_client.search_wanted(
+                    last_name=surname,
+                    first_name=comp["first_name"],
+                    middle_name=comp.get("patronymic")
+                )
+                if mvs_res:
+                    item = mvs_res[0]
+                    art = item.get("accusatory_item") or "ст. не вказана"
+                    mvs_status = f"🚨 <b>У РОЗШУКУ ({html.escape(art)})</b>"
+            except Exception:
+                mvs_status = "⚠️ Помилка зв'язку"
+        else:
+            mvs_status = "ℹ️ Потрібне ім'я"
+
+        results_text += (
+            f"<b>{i}. 👤 {html.escape(full_name)}</b>\n"
+            f"   • 🏛 ОГП: {ogp_status}\n"
+            f"   • 🚨 МВС: {mvs_status}\n\n"
+        )
+        await asyncio.sleep(0.3)
+
+    results_text += "ℹ️ <i>Цілодобовий моніторинг продовжує відстежувати зміни кожні 15 хв.</i>"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔄 Оновити статус ще раз", callback_data="refresh_check_all"),
+            InlineKeyboardButton(text="📋 Мій список", callback_data="show_list")
+        ],
+        [
+            InlineKeyboardButton(text="🏠 Головне меню", callback_data="go_main_menu")
+        ]
+    ])
+
+    try:
+        await status_msg.edit_text(
+            results_text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=keyboard
+        )
+    except Exception:
+        await message.answer(
+            results_text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=keyboard
+        )
+
+@router.callback_query(F.data == "refresh_check_all")
+async def handle_callback_refresh_check_all(callback: CallbackQuery):
+    await callback.answer("Оновлюю моментальний статус...")
+    await handle_check_all(callback.message)

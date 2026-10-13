@@ -14,15 +14,18 @@ router = Router()
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [
-            KeyboardButton(text="➕ Додати особу"),
-            KeyboardButton(text="📋 Мій список")
+            KeyboardButton(text="⚡ Перевірити всіх зараз"),
+            KeyboardButton(text="➕ Додати особу")
         ],
         [
-            KeyboardButton(text="🔍 Швидка перевірка"),
-            KeyboardButton(text="🚨 Розшук МВС")
+            KeyboardButton(text="📋 Мій список"),
+            KeyboardButton(text="🔍 Швидка перевірка")
         ],
         [
-            KeyboardButton(text="📊 Статус"),
+            KeyboardButton(text="🚨 Розшук МВС"),
+            KeyboardButton(text="📊 Статус")
+        ],
+        [
             KeyboardButton(text="ℹ️ Довідка")
         ]
     ]
@@ -60,10 +63,11 @@ async def handle_start(message: Message):
         f"1. <b>Офіс Генерального прокурора України</b> (повістки про виклик, підозри, спеціальне досудове розслідування).\n"
         f"2. <b>Базу розшуку МВС України</b> (особи, які переховуються від органів влади).\n\n"
         f"📌 <b>Можливості:</b>\n"
+        f"• <b>⚡ Моментальна перевірка всіх:</b> перевіряє весь ваш список тут і зараз в 1 клік.\n"
         f"• <b>Цілодобовий моніторинг:</b> автоперевірка кожні {CHECK_INTERVAL_MINUTES} хв.\n"
-        f"• <b>Розумний пошук повісток:</b> врахування українських відмінків прізвищ.\n"
-        f"• <b>Розшук МВС:</b> миттєва перевірка за Прізвищем та Іменем з фото та статтею ККУ.\n"
-        f"• <b>Прямі файли:</b> офіційні посилання та PDF-документи.\n\n"
+        f"• <b>Розумний контроль розшуку МВС:</b> фіксація статусу та сповіщення про оголошення або зняття з розшуку.\n"
+        f"• <b>Пошук повісток ОГП:</b> врахування українських відмінків прізвищ.\n"
+        f"• <b>Розшук МВС:</b> перевірка за Прізвищем та Іменем з фото та статтею ККУ.\n\n"
         f"Оберіть дію в меню нижче 👇"
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
@@ -73,23 +77,23 @@ async def handle_start(message: Message):
 async def handle_help(message: Message):
     help_text = (
         "📖 <b>Інструкція з використання бота:</b>\n\n"
+        "⚡ <b>Моментальна перевірка списку:</b>\n"
+        "Натисніть <b>«⚡ Перевірити всіх зараз»</b> або надішліть <code>/check_all</code>.\n"
+        "<i>Бот миттєво перевірить актуальний статус кожної особи зі списку в базах ОГП та МВС без зайвої історії.</i>\n\n"
         "1️⃣ <b>Додати особу на моніторинг:</b>\n"
         "Натисніть <b>«➕ Додати особу»</b> або надішліть команду:\n"
         "<code>/add Прізвище Ім'я По батькові</code>\n"
         "<i>(наприклад: <code>/add Шевченко Тарас Григорович</code>)</i>\n\n"
-        "2️⃣ <b>Швидка перевірка повісток ОГП:</b>\n"
-        "Натисніть <b>«🔍 Швидка перевірка»</b> або надішліть:\n"
-        "<code>/check Прізвище</code>\n\n"
-        "3️⃣ <b>Перевірка в базі розшуку МВС:</b>\n"
-        "Натисніть <b>«🚨 Розшук МВС»</b> або надішліть:\n"
-        "<code>/mvs Прізвище Ім'я</code>\n"
-        "<i>Бот перевірить особу в реєстрі розшукуваних МВС і надішле фото та статтю ККУ.</i>\n\n"
-        "4️⃣ <b>Переглянути відстежуваних осіб:</b>\n"
+        "2️⃣ <b>Переглянути відстежуваних осіб:</b>\n"
         "Натисніть <b>«📋 Мій список»</b> або надішліть <code>/list</code>.\n\n"
+        "3️⃣ <b>Швидка перевірка повісток ОГП:</b>\n"
+        "Натисніть <b>«🔍 Швидка перевірка»</b> або надішліть <code>/check Прізвище</code>.\n\n"
+        "4️⃣ <b>Перевірка в базі розшуку МВС:</b>\n"
+        "Натисніть <b>«🚨 Розшук МВС»</b> або надішліть <code>/mvs Прізвище Ім'я</code>.\n\n"
         "5️⃣ <b>Статус моніторингу:</b>\n"
         "Натисніть <b>«📊 Статус»</b> або надішліть <code>/status</code>."
     )
-    await message.answer(help_text, parse_mode=ParseMode.HTML)
+    await message.answer(help_text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
 
 @router.message(Command("status"))
 @router.message(F.text == "📊 Статус")
@@ -113,4 +117,4 @@ async def handle_status(message: Message):
         f"• Всього осіб на моніторингу: {global_stats['tracked_persons']}\n"
         f"• Надіслано сповіщень: {global_stats['notifications_sent']}"
     )
-    await message.answer(status_text, parse_mode=ParseMode.HTML)
+    await message.answer(status_text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())

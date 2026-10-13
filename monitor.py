@@ -109,6 +109,24 @@ async def send_mvs_alert(bot: Bot, user_id: int, person: dict, mvs_item: dict):
     except Exception as e:
         logger.error(f"Failed to send MVS alert to user {user_id}: {e}")
 
+async def send_mvs_removed_alert(bot: Bot, user_id: int, person: dict):
+    """
+    Alerts the user when a tracked person is removed from MVS wanted registry.
+    """
+    import html
+    try:
+        text = (
+            f"🟢 <b>УВАГА! ОСОБУ ЗНЯТО З РОЗШУКУ МВС!</b>\n\n"
+            f"👤 <b>ПІБ:</b> <b>{html.escape(person['full_name'])}</b>\n\n"
+            f"✅ Дана особа більше <b>не перебуває</b> в офіційній базі розшукуваних осіб МВС України "
+            f"(припинено розшук або закрито кримінальне провадження).\n\n"
+            f"🔔 <i>Моніторинг продовжує відстежувати зміни.</i>"
+        )
+        await bot.send_message(chat_id=user_id, text=text, parse_mode=ParseMode.HTML)
+        logger.info(f"Successfully alerted user {user_id} regarding MVS removal for {person['full_name']}")
+    except Exception as e:
+        logger.error(f"Failed to send MVS removal alert to user {user_id}: {e}")
+
 async def check_summons_for_all(bot: Bot):
     """
     Single check cycle:
@@ -195,13 +213,27 @@ async def check_summons_for_all(bot: Bot):
                     first_name=comp["first_name"],
                     middle_name=comp.get("patronymic")
                 )
-                for mvs_item in mvs_results:
-                    mvs_key = f"mvs://wanted/{mvs_item.get('last_name')}_{mvs_item.get('first_name')}_{mvs_item.get('birthday')}"
-                    already_sent = await db.has_notification_been_sent(p["user_id"], p["id"], mvs_key)
-                    if not already_sent:
-                        found_in_this_cycle += 1
-                        await send_mvs_alert(bot, p["user_id"], p, mvs_item)
-                        await db.record_notification_sent(p["user_id"], p["id"], mvs_key)
+                currently_wanted = len(mvs_results) > 0
+                prev_wanted = bool(p.get("is_mvs_wanted", 0))
+
+                # Transition 1: Person newly declared wanted
+                if currently_wanted and not prev_wanted:
+                    found_in_this_cycle += 1
+                    await send_mvs_alert(bot, p["user_id"], p, mvs_results[0])
+                    await db.update_mvs_wanted_status(p["id"], 1)
+                    # Also record in notifications sent
+                    mvs_key = f"mvs://wanted/{mvs_results[0].get('last_name')}_{mvs_results[0].get('first_name')}_{mvs_results[0].get('birthday')}"
+                    await db.record_notification_sent(p["user_id"], p["id"], mvs_key)
+
+                # Transition 2: Person removed from wanted registry!
+                elif not currently_wanted and prev_wanted:
+                    found_in_this_cycle += 1
+                    await send_mvs_removed_alert(bot, p["user_id"], p)
+                    await db.update_mvs_wanted_status(p["id"], 0)
+
+                # If currently_wanted and prev_wanted: already known -> no repeat reminders!
+                # If not currently_wanted and not prev_wanted: clean -> do nothing!
+
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Error checking MVS for {p['full_name']}: {e}")
