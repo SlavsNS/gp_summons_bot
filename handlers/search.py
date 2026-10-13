@@ -8,7 +8,7 @@ from aiogram.enums import ParseMode
 
 from matcher import extract_name_components, match_summons_title
 from scraper import scraper
-from handlers.common import get_main_keyboard
+from handlers.common import get_main_keyboard, get_cancel_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -29,15 +29,19 @@ async def handle_search_start(message: Message, state: FSMContext):
         "🔍 <b>Швидка разова перевірка в базі ОГП:</b>\n\n"
         "Введіть ПІБ або прізвище для пошуку:\n"
         "<i>(наприклад: <code>Подольська</code> або <code>Гавриленко Володимир</code>)</i>\n\n"
-        "<i>Для скасування надішліть /cancel</i>",
+        "<i>Натисніть кнопку нижче або /cancel для повернення до меню.</i>",
         parse_mode=ParseMode.HTML,
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_cancel_keyboard()
     )
 
 @router.message(SearchStates.waiting_for_query)
 async def handle_search_query(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("Будь ласка, надішліть текстове повідомлення з ім'ям.")
+        return
+    if message.text in ["🔙 Головне меню", "❌ Скасувати", "🏠 Головне меню", "/cancel"]:
+        await state.clear()
+        await message.answer("Повертаємося до головного меню 👇", reply_markup=get_main_keyboard())
         return
     await perform_quick_search(message, message.text.strip(), state)
 

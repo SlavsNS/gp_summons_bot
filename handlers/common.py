@@ -3,6 +3,8 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 
+from aiogram.fsm.context import FSMContext
+
 from database import db
 from monitor import LAST_CHECK_INFO
 from config import CHECK_INTERVAL_MINUTES
@@ -25,6 +27,22 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
         ]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+    keyboard = [
+        [
+            KeyboardButton(text="🔙 Головне меню")
+        ]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+@router.message(Command("cancel"))
+@router.message(F.text == "🔙 Головне меню")
+@router.message(F.text == "❌ Скасувати")
+@router.message(F.text == "🏠 Головне меню")
+async def handle_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Головне меню 👇", reply_markup=get_main_keyboard())
 
 @router.message(CommandStart())
 async def handle_start(message: Message):

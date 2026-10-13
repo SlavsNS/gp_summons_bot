@@ -10,7 +10,7 @@ from database import db
 from matcher import extract_name_components, match_summons_title
 from scraper import scraper
 from mvs_client import mvs_client
-from handlers.common import get_main_keyboard
+from handlers.common import get_main_keyboard, get_cancel_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -31,26 +31,22 @@ async def handle_add_person_start(message: Message, state: FSMContext):
     await message.answer(
         "📝 <b>Введіть ПІБ або прізвище особи для моніторингу:</b>\n\n"
         "<i>Приклади:</i>\n"
-        "• <code>Гавриленко Володимир Анатолійович</code> (найточніший пошук)\n"
-        "• <code>Подольська Д.М.</code> (пошук з ініціалами)\n"
-        "• <code>Шевченко</code> (пошук за прізвищем)\n\n"
-        "<i>Для скасування надішліть /cancel</i>",
+        "• <code>Дудник Микола Петрович</code> (найточніший пошук ОГП + МВС)\n"
+        "• <code>Гавриленко Володимир</code>\n"
+        "• <code>Шевченко</code>\n\n"
+        "<i>Натисніть кнопку нижче або надішліть /cancel для повернення до меню.</i>",
         parse_mode=ParseMode.HTML,
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_cancel_keyboard()
     )
-
-@router.message(Command("cancel"))
-@router.message(F.text == "❌ Скасувати")
-async def handle_cancel(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state:
-        await state.clear()
-    await message.answer("Дію скасовано.", reply_markup=get_main_keyboard())
 
 @router.message(AddPersonStates.waiting_for_name)
 async def handle_add_person_name(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("Будь ласка, надішліть текстове повідомлення з ім'ям.")
+        return
+    if message.text in ["🔙 Головне меню", "❌ Скасувати", "🏠 Головне меню", "/cancel"]:
+        await state.clear()
+        await message.answer("Повертаємося до головного меню 👇", reply_markup=get_main_keyboard())
         return
     await process_person_name(message, message.text.strip(), state)
 
@@ -59,7 +55,7 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
 
     if len(raw_name) < 2:
         await message.answer(
-            "⚠️ ПІБ занадто коротке. Спробуйте ще раз через команду <code>/add ПІБ</code>.",
+            "⚠️ ПІБ занадто коротке. Спробуйте ще раз через кнопку <b>«➕ Додати особу»</b>.",
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_keyboard()
         )
@@ -95,65 +91,97 @@ async def process_person_name(message: Message, raw_name: str, state: FSMContext
         )
         return
 
-    # Initial response
-    status_msg = await message.answer(
-        f"✅ <b>Особу успішно додано!</b>\n\n"
+    # Initial confirmation message with explanation of BOTH registers
+    await message.answer(
+        f"✅ <b>Особу успішно додано до моніторингу!</b>\n\n"
         f"👤 <b>ПІБ:</b> <code>{html.escape(comp['raw'])}</code>\n"
         f"🔍 <b>Пошукова основа:</b> <code>{html.escape(stem)}</code>\n\n"
-        f"⏳ <i>Здійснюю початкову перевірку на сайті ОГП...</i>",
+        f"🛡 <b>Встановлено подвійний моніторинг 24/7 (кожні 15 хв):</b>\n"
+        f"1. 🏛 <b>Офіс Генпрокурора (ОГП):</b> повістки про виклик, підозри, спецрозслідування.\n"
+        f"2. 🚨 <b>База розшуку МВС:</b> кримінальний розшук осіб, які переховуються від органів влади.\n\n"
+        f"⏳ <i>Здійснюю первинну перевірку в обох реєстрах...</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard()
     )
 
-    # Perform immediate check
+    # Perform immediate check on BOTH systems
+    ogp_matches = []
     try:
         search_results = await scraper.search_summons(stem, page=1)
-        matches = []
         for post in search_results:
             is_match, conf, reason = match_summons_title(post["title"], comp)
             if is_match and conf >= 0.7:
-                matches.append(post)
-
-        if matches:
-            response_text = (
-                f"⚠️ <b>Увага! На сайті ОГП вже є публікації щодо цієї особи ({len(matches)}):</b>\n\n"
-            )
-            for m in matches[:5]:
-                clean_t = html.escape(m['title'])
-                response_text += f"📅 <i>{m['date']}</i>\n<a href='{m['url']}'>{clean_t}</a>\n\n"
-
-            if len(matches) > 5:
-                response_text += f"<i>...та ще {len(matches) - 5} публікацій.</i>\n\n"
-
-            response_text += "Бот продовжуватиме цілодобовий моніторинг нових повісток."
-            await message.answer(response_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        else:
-            await message.answer(
-                "🟢 <b>Поточних повісток на сайті ОГП не виявлено.</b>\n"
-                "Система відстежуватиме сайт цілодобово і надішле сповіщення, щойно з'явиться будь-яка повістка.",
-                parse_mode=ParseMode.HTML
-            )
-
-        # Immediate check in MVS database if first name is available
-        if comp.get("first_name"):
-            try:
-                mvs_res = await mvs_client.search_wanted(
-                    last_name=surname,
-                    first_name=comp["first_name"],
-                    middle_name=comp.get("patronymic")
-                )
-                if mvs_res:
-                    await message.answer(
-                        f"🚨 <b>УВАГА! Ця особа знайдена в базі розшуку МВС України ({len(mvs_res)} запис(ів))!</b>\n\n"
-                        f"Скористайтеся <code>/mvs {html.escape(comp['raw'])}</code> або кнопкою <b>«🚨 Розшук МВС»</b>, щоб переглянути фото, статтю ККУ та орган розшуку.",
-                        parse_mode=ParseMode.HTML
-                    )
-            except Exception as mvs_e:
-                logger.warning(f"Error checking MVS on add: {mvs_e}")
-
+                ogp_matches.append(post)
     except Exception as e:
-        logger.error(f"Error during initial check: {e}")
-        await message.answer("⚠️ Не вдалося виконати початкову перевірку сайту, але моніторинг активний.")
+        logger.error(f"Error during OGP check: {e}")
+
+    mvs_matches = []
+    if comp.get("first_name"):
+        try:
+            mvs_matches = await mvs_client.search_wanted(
+                last_name=surname,
+                first_name=comp["first_name"],
+                middle_name=comp.get("patronymic")
+            )
+        except Exception as mvs_e:
+            logger.error(f"Error checking MVS on add: {mvs_e}")
+
+    # Build comprehensive report
+    report = (
+        f"📊 <b>Звіт первинної перевірки:</b>\n"
+        f"👤 <code>{html.escape(comp['raw'])}</code>\n\n"
+    )
+
+    # 1. OGP section
+    if ogp_matches:
+        report += f"🏛 <b>ОГП:</b> ⚠️ <b>Виявлено публікації ({len(ogp_matches)}):</b>\n"
+        for m in ogp_matches[:3]:
+            clean_t = html.escape(m['title'])
+            report += f"• 📅 <i>{m['date']}</i> — <a href='{m['url']}'>{clean_t}</a>\n"
+        if len(ogp_matches) > 3:
+            report += f"<i>...та ще {len(ogp_matches) - 3} публікацій.</i>\n"
+    else:
+        report += "🏛 <b>ОГП:</b> 🟢 Поточних повісток не виявлено.\n"
+
+    report += "\n"
+
+    # 2. MVS section
+    if mvs_matches:
+        report += f"🚨 <b>МВС:</b> ⚠️ <b>УВАГА! Особу виявлено в базі розшуку ({len(mvs_matches)}):</b>\n"
+        for item in mvs_matches[:2]:
+            full_pib = f"{item.get('last_name', '')} {item.get('first_name', '')} {item.get('middle_name', '')}".strip()
+            report += (
+                f"• 👤 <b>{html.escape(full_pib)}</b> ({html.escape(item.get('birthday') or '')})\n"
+                f"  ⚖️ Стаття ККУ: <code>{html.escape(item.get('accusatory_item') or 'Не вказано')}</code>\n"
+                f"  🚔 Орган: {html.escape(item.get('authority') or 'Не вказано')}\n"
+            )
+        report += f"<i>(Детальніше з фото: надішліть команду <code>/mvs {html.escape(comp['raw'])}</code>)</i>\n"
+    elif comp.get("first_name"):
+        report += "🚨 <b>МВС:</b> 🟢 В офіційному розшуку не перебуває.\n"
+    else:
+        report += "🚨 <b>МВС:</b> ℹ️ Для перевірки в розшуку вкажіть також ім'я (наприклад, <code>/mvs {html.escape(surname)} Ім'я</code>).\n"
+
+    report += (
+        f"\n🔔 <b>Цілодобовий моніторинг активний.</b>\n"
+        f"Щойно з'явиться повістка або оголошення в розшук — бот миттєво сповістить вас у цьому чаті!"
+    )
+
+    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📋 Мій список", callback_data="show_list"),
+            InlineKeyboardButton(text="➕ Додати ще", callback_data="add_another")
+        ],
+        [
+            InlineKeyboardButton(text="🏠 Головне меню", callback_data="go_main_menu")
+        ]
+    ])
+
+    await message.answer(
+        report,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=nav_keyboard
+    )
 
 @router.message(Command("list"))
 @router.message(F.text == "📋 Мій список")
@@ -217,3 +245,31 @@ async def handle_delete_person(callback: CallbackQuery):
             )
     else:
         await callback.answer("Помилка видалення або особу вже видалено.", show_alert=True)
+
+@router.callback_query(F.data == "show_list")
+async def handle_callback_show_list(callback: CallbackQuery):
+    await callback.answer()
+    await handle_list_persons(callback.message)
+
+@router.callback_query(F.data == "add_another")
+async def handle_callback_add_another(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AddPersonStates.waiting_for_name)
+    await callback.message.answer(
+        "📝 <b>Введіть ПІБ або прізвище наступної особи для моніторингу:</b>\n\n"
+        "<i>Приклади:</i>\n"
+        "• <code>Шевченко Тарас Григорович</code>\n"
+        "• <code>Ковальчук Петро</code>\n\n"
+        "<i>Натисніть кнопку нижче або надішліть /cancel для скасування.</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_cancel_keyboard()
+    )
+
+@router.callback_query(F.data == "go_main_menu")
+async def handle_callback_main_menu(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await callback.message.answer(
+        "Головне меню 👇",
+        reply_markup=get_main_keyboard()
+    )

@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 
 from mvs_client import mvs_client
 from matcher import normalize_text
-from handlers.common import get_main_keyboard
+from handlers.common import get_main_keyboard, get_cancel_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -34,15 +34,19 @@ async def handle_mvs_start(message: Message, state: FSMContext):
         "• <code>Петренко Петро</code>\n"
         "• <code>Шевченко Тарас Григорович</code>\n\n"
         "<i>Діапазон дат народження перевіряється автоматично (1900–сьогодні).</i>\n\n"
-        "<i>Для скасування надішліть /cancel</i>",
+        "<i>Натисніть кнопку нижче або /cancel для повернення до меню.</i>",
         parse_mode=ParseMode.HTML,
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_cancel_keyboard()
     )
 
 @router.message(MVSSearchStates.waiting_for_name)
 async def handle_mvs_query(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("Будь ласка, надішліть текстове повідомлення з ім'ям.")
+        return
+    if message.text in ["🔙 Головне меню", "❌ Скасувати", "🏠 Головне меню", "/cancel"]:
+        await state.clear()
+        await message.answer("Повертаємося до головного меню 👇", reply_markup=get_main_keyboard())
         return
     await perform_mvs_search(message, message.text.strip(), state)
 
