@@ -1,3 +1,5 @@
+import re
+import asyncio
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
@@ -18,23 +20,41 @@ router = Router()
 class AddPersonStates(StatesGroup):
     waiting_for_name = State()
 
+def split_raw_names(text: str) -> list[str]:
+    """Splits a multi-line or delimited text into individual person names."""
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(raw_lines) == 1 and ";" in raw_lines[0]:
+        raw_lines = [part.strip() for part in raw_lines[0].split(";") if part.strip()]
+    clean_names = []
+    for line in raw_lines:
+        cleaned = re.sub(r'^\s*(?:\d+[\.\)]|[-•*])\s*', '', line).strip()
+        if len(cleaned) >= 2:
+            clean_names.append(cleaned)
+    return clean_names
+
 @router.message(Command("add"))
 @router.message(F.text == "➕ Додати особу")
 async def handle_add_person_start(message: Message, state: FSMContext):
-    # Check if name was provided in the command line (e.g. /add Шевченко Тарас)
     args = message.text.split(maxsplit=1)
     if len(args) > 1 and args[0] == "/add":
-        await process_person_name(message, args[1].strip(), state)
+        names = split_raw_names(args[1])
+        if len(names) > 1:
+            await process_batch_names(message, names, state)
+        else:
+            await process_person_name(message, names[0] if names else args[1].strip(), state)
         return
 
     await state.set_state(AddPersonStates.waiting_for_name)
     await message.answer(
-        "📝 <b>Введіть ПІБ або прізвище особи для моніторингу:</b>\n\n"
-        "<i>Приклади:</i>\n"
-        "• <code>Дудник Микола Петрович</code> (найточніший пошук ОГП + МВС)\n"
-        "• <code>Гавриленко Володимир</code>\n"
-        "• <code>Шевченко</code>\n\n"
-        "<i>Натисніть кнопку нижче або надішліть /cancel для повернення до меню.</i>",
+        "📝 <b>Введіть ПІБ особи або надішліть список осіб:</b>\n\n"
+        "<i>Можна надіслати одну особу:</i>\n"
+        "• <code>Дудник Микола Петрович</code>\n\n"
+        "<i>Або список із кількох людей у стовпчик:</i>\n"
+        "<code>Шевченко Тарас Григорович\n"
+        "Петренко Петро\n"
+        "Ковальчук Сергій Васильович</code>\n\n"
+        "<i>Бот автоматично розпізнає кожного та поставить на подвійний моніторинг (ОГП + МВС).</i>\n\n"
+        "<i>Для повернення натисніть кнопку нижче або надішліть /cancel</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_cancel_keyboard()
     )
@@ -42,13 +62,129 @@ async def handle_add_person_start(message: Message, state: FSMContext):
 @router.message(AddPersonStates.waiting_for_name)
 async def handle_add_person_name(message: Message, state: FSMContext):
     if not message.text:
-        await message.answer("Будь ласка, надішліть текстове повідомлення з ім'ям.")
+        await message.answer("Будь ласка, надішліть текстове повідомлення з ім'ям або списком осіб.")
         return
     if message.text in ["🔙 Головне меню", "❌ Скасувати", "🏠 Головне меню", "/cancel"]:
         await state.clear()
         await message.answer("Повертаємося до головного меню 👇", reply_markup=get_main_keyboard())
         return
-    await process_person_name(message, message.text.strip(), state)
+
+    names = split_raw_names(message.text)
+    if len(names) > 1:
+        await process_batch_names(message, names, state)
+    else:
+        raw = names[0] if names else message.text.strip()
+        await process_person_name(message, raw, state)
+
+async def process_batch_names(message: Message, names: list[str], state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    import html
+
+    status_msg = await message.answer(
+        f"⏳ <i>Обробляю список із {len(names)} осіб... Ставлю на подвійний моніторинг (ОГП + МВС) та перевіряю бази.</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_keyboard()
+    )
+
+    results_lines = []
+    newly_added = 0
+    already_tracked = 0
+
+    for i, raw_name in enumerate(names, 1):
+        comp = extract_name_components(raw_name)
+        surname = comp["surname"]
+        stem = comp["stem"]
+
+        if not surname or len(raw_name) < 2:
+            results_lines.append(f"<b>{i}.</b> ⚠️ <code>{html.escape(raw_name)}</code> — <i>не вдалося розпізнати прізвище</i>")
+            continue
+
+        person_id = await db.add_tracked_person(
+            user_id=user_id,
+            full_name=comp["raw"],
+            surname=surname,
+            stem=stem
+        )
+
+        if not person_id:
+            already_tracked += 1
+            results_lines.append(f"<b>{i}. 👤 {html.escape(comp['raw'])}</b> — ℹ️ <i>вже є у вашому списку</i>")
+            continue
+
+        newly_added += 1
+
+        # Check OGP
+        ogp_status = "🟢 Повісток немає"
+        try:
+            ogp_res = await scraper.search_summons(stem, page=1)
+            matches = [p for p in ogp_res if match_summons_title(p["title"], comp)[0]]
+            if matches:
+                ogp_status = f"⚠️ <b>Є повістка</b> ({matches[0].get('date', '')})"
+        except Exception:
+            ogp_status = "⚠️ Помилка зв'язку"
+
+        # Check MVS
+        mvs_status = "🟢 В розшуку відсутній"
+        if comp.get("first_name"):
+            try:
+                mvs_res = await mvs_client.search_wanted(
+                    last_name=surname,
+                    first_name=comp["first_name"],
+                    middle_name=comp.get("patronymic")
+                )
+                if mvs_res:
+                    art = mvs_res[0].get("accusatory_item") or "ст. не вказана"
+                    mvs_status = f"🚨 <b>У РОЗШУКУ ({html.escape(art)})</b>"
+                    await db.update_mvs_wanted_status(person_id, 1)
+                    mvs_key = f"mvs://wanted/{mvs_res[0].get('last_name')}_{mvs_res[0].get('first_name')}_{mvs_res[0].get('birthday')}"
+                    await db.record_notification_sent(user_id, person_id, mvs_key)
+                else:
+                    await db.update_mvs_wanted_status(person_id, 0)
+            except Exception:
+                mvs_status = "⚠️ Помилка зв'язку"
+        else:
+            mvs_status = "ℹ️ Потрібне ім'я для МВС"
+
+        results_lines.append(
+            f"<b>{i}. 👤 {html.escape(comp['raw'])}</b>\n"
+            f"   • 🏛 ОГП: {ogp_status}\n"
+            f"   • 🚨 МВС: {mvs_status}"
+        )
+        await asyncio.sleep(0.3)
+
+    summary_text = (
+        f"✅ <b>ОБРОБКА СПИСКУ ЗАВЕРШЕНА!</b>\n"
+        f"Успішно додано: <b>{newly_added}</b> | Вже були: <b>{already_tracked}</b>\n\n"
+        + "\n\n".join(results_lines) + "\n\n"
+        f"🛡 <i>Усі особи поставлені на цілодобовий моніторинг ОГП + МВС (перевірка кожні 15 хв).</i>"
+    )
+
+    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚡ Перевірити всіх зараз", callback_data="refresh_check_all"),
+            InlineKeyboardButton(text="📋 Мій список", callback_data="show_list")
+        ],
+        [
+            InlineKeyboardButton(text="➕ Додати ще", callback_data="add_another"),
+            InlineKeyboardButton(text="🏠 Головне меню", callback_data="go_main_menu")
+        ]
+    ])
+
+    try:
+        await status_msg.edit_text(
+            summary_text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=nav_keyboard
+        )
+    except Exception:
+        await message.answer(
+            summary_text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=nav_keyboard
+        )
 
 async def process_person_name(message: Message, raw_name: str, state: FSMContext):
     await state.clear()
