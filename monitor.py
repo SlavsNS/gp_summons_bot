@@ -2,8 +2,9 @@ import asyncio
 import logging
 from typing import Optional
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from config import CHECK_INTERVAL_MINUTES
 from database import db
@@ -52,13 +53,22 @@ async def send_summons_alert(bot: Bot, user_id: int, person: dict, post: dict):
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-        await bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
-            disable_web_page_preview=False
-        )
+        for attempt in range(2):
+            try:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=False
+                )
+                break
+            except TelegramRetryAfter as tra:
+                await asyncio.sleep(tra.retry_after + 1)
+            except TelegramForbiddenError:
+                logger.warning(f"User {user_id} blocked the bot. Deactivating user.")
+                await db.deactivate_user(user_id)
+                return
 
         # Mark as sent in DB
         await db.record_notification_sent(user_id, person["id"], post["url"])
@@ -72,7 +82,6 @@ async def send_mvs_alert(bot: Bot, user_id: int, person: dict, mvs_item: dict):
     Sends an alert with full dossier and photo when a tracked person is found in MVS wanted database.
     """
     import html, base64
-    from aiogram.types import BufferedInputFile
 
     try:
         f_name = mvs_item.get("first_name", "")
@@ -101,10 +110,22 @@ async def send_mvs_alert(bot: Bot, user_id: int, person: dict, mvs_item: dict):
                 photo_file = BufferedInputFile(photo_bytes, filename=f"mvs_{person['id']}.jpg")
                 await bot.send_photo(chat_id=user_id, photo=photo_file, caption=caption, parse_mode=ParseMode.HTML)
                 return
+            except TelegramForbiddenError:
+                await db.deactivate_user(user_id)
+                return
             except Exception as p_err:
                 logger.warning(f"Failed to send alert photo: {p_err}")
 
-        await bot.send_message(chat_id=user_id, text=caption, parse_mode=ParseMode.HTML)
+        for attempt in range(2):
+            try:
+                await bot.send_message(chat_id=user_id, text=caption, parse_mode=ParseMode.HTML)
+                break
+            except TelegramRetryAfter as tra:
+                await asyncio.sleep(tra.retry_after + 1)
+            except TelegramForbiddenError:
+                await db.deactivate_user(user_id)
+                return
+
         logger.info(f"Successfully alerted user {user_id} regarding MVS wanted for {full_pib}")
     except Exception as e:
         logger.error(f"Failed to send MVS alert to user {user_id}: {e}")
@@ -122,7 +143,16 @@ async def send_mvs_removed_alert(bot: Bot, user_id: int, person: dict):
             f"(припинено розшук або закрито кримінальне провадження).\n\n"
             f"🔔 <i>Моніторинг продовжує відстежувати зміни.</i>"
         )
-        await bot.send_message(chat_id=user_id, text=text, parse_mode=ParseMode.HTML)
+        for attempt in range(2):
+            try:
+                await bot.send_message(chat_id=user_id, text=text, parse_mode=ParseMode.HTML)
+                break
+            except TelegramRetryAfter as tra:
+                await asyncio.sleep(tra.retry_after + 1)
+            except TelegramForbiddenError:
+                await db.deactivate_user(user_id)
+                return
+
         logger.info(f"Successfully alerted user {user_id} regarding MVS removal for {person['full_name']}")
     except Exception as e:
         logger.error(f"Failed to send MVS removal alert to user {user_id}: {e}")
@@ -156,24 +186,27 @@ async def check_summons_for_all(bot: Bot):
         })
 
     # Strategy A: Scan latest posts from page 1 & 2
-    latest_posts = []
-    for page in [1, 2]:
-        page_posts = await scraper.get_latest_summons(page=page)
-        latest_posts.extend(page_posts)
-        if len(page_posts) < 5:
-            break
+    try:
+        latest_posts = []
+        for page in [1, 2]:
+            page_posts = await scraper.get_latest_summons(page=page)
+            latest_posts.extend(page_posts)
+            if len(page_posts) < 5:
+                break
 
-    for post in latest_posts:
-        await db.record_seen_post(post["url"], post["title"], post.get("date"))
+        for post in latest_posts:
+            await db.record_seen_post(post["url"], post["title"], post.get("date"))
 
-        for item in parsed_persons:
-            p = item["db_person"]
-            matched, confidence, reason = match_summons_title(post["title"], item["components"])
-            if matched and confidence >= 0.7:
-                already_sent = await db.has_notification_been_sent(p["user_id"], p["id"], post["url"])
-                if not already_sent:
-                    found_in_this_cycle += 1
-                    await send_summons_alert(bot, p["user_id"], p, post)
+            for item in parsed_persons:
+                p = item["db_person"]
+                matched, confidence, reason = match_summons_title(post["title"], item["components"])
+                if matched and confidence >= 0.7:
+                    already_sent = await db.has_notification_been_sent(p["user_id"], p["id"], post["url"])
+                    if not already_sent:
+                        found_in_this_cycle += 1
+                        await send_summons_alert(bot, p["user_id"], p, post)
+    except Exception as e:
+        logger.error(f"Error in Strategy A (latest feed): {e}")
 
     # Strategy B: Targeted search by stem for all distinct stems
     stems_map = {}

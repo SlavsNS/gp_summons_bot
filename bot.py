@@ -86,6 +86,24 @@ async def start_health_server():
     logger.info(f"Health check & diag web server started on 0.0.0.0:{port}")
 
 
+async def run_self_ping_worker():
+    """Periodically pings the public URL to keep Render awake as an automatic fail-safe."""
+    import os
+    public_url = os.getenv("RENDER_EXTERNAL_URL") or "https://gp-summons-bot.onrender.com"
+    # Wait 2 minutes after startup before first ping
+    await asyncio.sleep(120)
+    logger.info(f"Starting auto self-ping keepalive worker for: {public_url}")
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.head(public_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    logger.debug(f"Self-ping to {public_url} returned {resp.status}")
+        except Exception as e:
+            logger.debug(f"Self-ping notice: {e}")
+        # Ping every 9 minutes (Render suspends after 15 minutes of inactivity)
+        await asyncio.sleep(540)
+
+
 async def on_startup(bot: Bot):
     bot_info = await bot.get_me()
     logger.info("=" * 60)
@@ -95,6 +113,9 @@ async def on_startup(bot: Bot):
 
     # Start background monitoring worker task
     asyncio.create_task(run_monitoring_worker(bot))
+
+    # Start self-ping fail-safe keepalive task
+    asyncio.create_task(run_self_ping_worker())
 
 
 async def main():
@@ -120,8 +141,18 @@ async def main():
     try:
         # Drop pending updates so bot doesn't reply to old messages
         await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Початок отримання оновлень (polling)...")
-        await dp.start_polling(bot)
+
+        # Resilient polling loop with auto-reconnection on network drops
+        while True:
+            try:
+                logger.info("Початок отримання оновлень (polling)...")
+                await dp.start_polling(bot, handle_signals=False)
+                break
+            except (KeyboardInterrupt, SystemExit):
+                break
+            except Exception as e:
+                logger.error(f"Помилка з'єднання з Telegram під час polling: {e}. Перепідключення через 5 сек...", exc_info=True)
+                await asyncio.sleep(5)
     finally:
         if _health_runner:
             await _health_runner.cleanup()

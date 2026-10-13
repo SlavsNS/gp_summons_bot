@@ -10,13 +10,16 @@ class Database:
         self._init_tables()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000;")
         return conn
 
     def _init_tables(self):
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
             
             # Users table
             cursor.execute("""
@@ -86,6 +89,14 @@ class Database:
                         first_name=excluded.first_name,
                         is_active=1
                 """, (user_id, username, first_name))
+                conn.commit()
+        await asyncio.to_thread(_sync)
+
+    async def deactivate_user(self, user_id: int):
+        def _sync():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE users SET is_active = 0 WHERE user_id = ?", (user_id,))
                 conn.commit()
         await asyncio.to_thread(_sync)
 
