@@ -31,8 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("summons_bot")
 
+_health_runner = None
+_health_site = None
+
 async def start_health_server():
     """Runs a lightweight HTTP server on $PORT for Render health checks and diagnostics."""
+    global _health_runner, _health_site
     import os
     port = int(os.getenv("PORT", "10000"))
     app = web.Application()
@@ -69,20 +73,16 @@ async def start_health_server():
         except Exception as e:
             return web.Response(text=f"Diagnostic error: {type(e).__name__}: {str(e)}", status=500)
 
-
-
-
-        
     app.router.add_get("/", handle_ping)
     app.router.add_head("/", handle_ping)
     app.router.add_get("/health", handle_ping)
     app.router.add_head("/health", handle_ping)
     app.router.add_get("/diag", handle_diag)
     
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+    _health_runner = web.AppRunner(app)
+    await _health_runner.setup()
+    _health_site = web.TCPSite(_health_runner, "0.0.0.0", port)
+    await _health_site.start()
     logger.info(f"Health check & diag web server started on 0.0.0.0:{port}")
 
 
@@ -95,15 +95,15 @@ async def on_startup(bot: Bot):
 
     # Start background monitoring worker task
     asyncio.create_task(run_monitoring_worker(bot))
-    
-    # Start web server for Render health checks
-    asyncio.create_task(start_health_server())
 
 
 async def main():
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN не вказано! Перевірте файл .env.")
         sys.exit(1)
+
+    # 1. Start web server immediately for Render health checks
+    await start_health_server()
 
     bot = Bot(
         token=BOT_TOKEN,
@@ -123,6 +123,8 @@ async def main():
         logger.info("Початок отримання оновлень (polling)...")
         await dp.start_polling(bot)
     finally:
+        if _health_runner:
+            await _health_runner.cleanup()
         await bot.session.close()
 
 if __name__ == "__main__":
